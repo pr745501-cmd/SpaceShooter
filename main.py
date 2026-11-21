@@ -1,4 +1,5 @@
 
+import asyncio
 import pygame
 import random
 import sys
@@ -17,10 +18,16 @@ WIDTH, HEIGHT = 900, 650
 FPS = 60
 ENEMY_SPEED = 75
 
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
+screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.SCALED)
 pygame.display.set_caption("GALAXY WAR - Space Shooter")
 
 clock = pygame.time.Clock()
+
+# Touch controls for phones and tablets.
+TOUCH_LEFT = pygame.Rect(28, HEIGHT - 105, 92, 76)
+TOUCH_RIGHT = pygame.Rect(132, HEIGHT - 105, 92, 76)
+TOUCH_FIRE = pygame.Rect(WIDTH - 126, HEIGHT - 112, 98, 84)
+touch_positions = {}
 
 # ==================================================
 # 2. COLORS
@@ -460,270 +467,298 @@ def start_game():
 # 12. MAIN LOOP
 # ==================================================
 
-running = True
+async def main():
+    global game_state, bullets, enemy_bullets, high_score, invulnerable_until
+    global last_enemy_shot, last_enemy_spawn, last_shot, lives, player_x, player_y
+    global restart_button, resume_button, score, shake, start_button, menu_button
+    running = True
 
-while running:
+    while running:
 
-    dt = clock.tick(FPS) / 1000
-    now = pygame.time.get_ticks()
+        dt = clock.tick(FPS) / 1000
+        now = pygame.time.get_ticks()
 
-    update_stars()
-    update_particles()
+        # Show on-screen controls only on narrow mobile-sized screens.
+        # The game keeps keyboard controls on wider desktop screens.
+        try:
+            window_width = pygame.display.get_window_size()[0]
+        except (AttributeError, pygame.error):
+            window_width = WIDTH
+        show_touch_controls = window_width <= 768
 
-    # ==============================================
-    # 13. EVENTS
-    # ==============================================
+        update_stars()
+        update_particles()
 
-    for event in pygame.event.get():
+        # ==============================================
+        # 13. EVENTS
+        # ==============================================
 
-        if event.type == pygame.QUIT:
-            running = False
+        for event in pygame.event.get():
 
-        if event.type == pygame.KEYDOWN:
+            if event.type == pygame.QUIT:
+                running = False
 
-            if event.key == pygame.K_ESCAPE:
+            # Convert normalized finger positions to the game's logical coordinates.
+            if event.type == pygame.FINGERDOWN or event.type == pygame.FINGERMOTION:
+                touch_positions[event.finger_id] = (int(event.x * WIDTH), int(event.y * HEIGHT))
+            if event.type == pygame.FINGERUP:
+                touch_positions.pop(event.finger_id, None)
 
-                if game_state == PLAYING:
-                    game_state = PAUSED
-
-                elif game_state == PAUSED:
+            # Touch taps also activate menu, pause, and game-over buttons.
+            if event.type == pygame.FINGERDOWN:
+                tap_pos = (int(event.x * WIDTH), int(event.y * HEIGHT))
+                if game_state == MENU and start_button.collidepoint(tap_pos):
+                    start_game()
+                elif game_state == GAME_OVER:
+                    if restart_button.collidepoint(tap_pos):
+                        start_game()
+                    elif menu_button.collidepoint(tap_pos):
+                        game_state = MENU
+                elif game_state == PAUSED and resume_button.collidepoint(tap_pos):
                     game_state = PLAYING
 
-                elif game_state == MENU:
-                    running = False
-
-            if game_state == MENU:
-
-                if event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    start_game()
-
-            elif game_state == PAUSED:
-
-                if event.key in (pygame.K_p, pygame.K_RETURN):
-                    game_state = PLAYING
-
-            elif game_state == GAME_OVER:
-
-                if event.key == pygame.K_r:
-                    start_game()
+            if event.type == pygame.KEYDOWN:
 
                 if event.key == pygame.K_ESCAPE:
-                    game_state = MENU
 
-        if event.type == pygame.MOUSEBUTTONDOWN:
+                    if game_state == PLAYING:
+                        game_state = PAUSED
 
-            if event.button == 1:
+                    elif game_state == PAUSED:
+                        game_state = PLAYING
+
+                    elif game_state == MENU:
+                        running = False
 
                 if game_state == MENU:
 
-                    if start_button.collidepoint(event.pos):
+                    if event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         start_game()
-
-                elif game_state == GAME_OVER:
-
-                    if restart_button.collidepoint(event.pos):
-                        start_game()
-
-                    elif menu_button.collidepoint(event.pos):
-                        game_state = MENU
 
                 elif game_state == PAUSED:
 
-                    if resume_button.collidepoint(event.pos):
+                    if event.key in (pygame.K_p, pygame.K_RETURN):
                         game_state = PLAYING
 
-    # ==============================================
-    # 14. PLAYING STATE
-    # ==============================================
+                elif game_state == GAME_OVER:
 
-    if game_state == PLAYING:
+                    if event.key == pygame.K_r:
+                        start_game()
 
-        elapsed = (now - game_start_time) / 1000
+                    if event.key == pygame.K_ESCAPE:
+                        game_state = MENU
 
-        difficulty = min(1.0, elapsed / 300)
+            if event.type == pygame.MOUSEBUTTONDOWN:
 
-        current_enemy_speed = ENEMY_SPEED + difficulty * 20
+                if event.button == 1:
 
-        spawn_delay = max(1400, 2200 - int(elapsed * 2))
+                    if game_state == MENU:
 
-        # Player movement
-        keys = pygame.key.get_pressed()
+                        if start_button.collidepoint(event.pos):
+                            start_game()
 
-        dx = 0
-        dy = 0
+                    elif game_state == GAME_OVER:
 
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            dx -= 1
+                        if restart_button.collidepoint(event.pos):
+                            start_game()
 
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            dx += 1
+                        elif menu_button.collidepoint(event.pos):
+                            game_state = MENU
 
-        if keys[pygame.K_UP] or keys[pygame.K_w]:
-            dy -= 1
+                    elif game_state == PAUSED:
 
-        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
-            dy += 1
+                        if resume_button.collidepoint(event.pos):
+                            game_state = PLAYING
 
-        if dx != 0 and dy != 0:
-            dx *= 0.707
-            dy *= 0.707
+        # ==============================================
+        # 14. PLAYING STATE
+        # ==============================================
 
-        player_x += dx * 350 * dt
-        player_y += dy * 350 * dt
+        if game_state == PLAYING:
 
-        player_x = max(30, min(WIDTH - 30, player_x))
-        player_y = max(40, min(HEIGHT - 40, player_y))
+            elapsed = (now - game_start_time) / 1000
 
-        # Continuous shooting
-        if keys[pygame.K_SPACE] and now - last_shot > 220:
+            difficulty = min(1.0, elapsed / 300)
 
-            bullets.append(
-                pygame.Rect(
-                    int(player_x - 4),
-                    int(player_y - 30),
-                    8,
-                    20
+            current_enemy_speed = ENEMY_SPEED + difficulty * 20
+
+            spawn_delay = max(1400, 2200 - int(elapsed * 2))
+
+            # Player movement
+            keys = pygame.key.get_pressed()
+
+            dx = 0
+            dy = 0
+
+            if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                dx -= 1
+
+            if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                dx += 1
+
+            if keys[pygame.K_UP] or keys[pygame.K_w]:
+                dy -= 1
+
+            if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+                dy += 1
+
+            touch_left = show_touch_controls and any(
+                TOUCH_LEFT.collidepoint(pos) for pos in touch_positions.values()
+            )
+            touch_right = show_touch_controls and any(
+                TOUCH_RIGHT.collidepoint(pos) for pos in touch_positions.values()
+            )
+            touch_fire = show_touch_controls and any(
+                TOUCH_FIRE.collidepoint(pos) for pos in touch_positions.values()
+            )
+            if touch_left:
+                dx -= 1
+            if touch_right:
+                dx += 1
+
+            if dx != 0 and dy != 0:
+                dx *= 0.707
+                dy *= 0.707
+
+            player_x += dx * 350 * dt
+            player_y += dy * 350 * dt
+
+            player_x = max(30, min(WIDTH - 30, player_x))
+            player_y = max(40, min(HEIGHT - 40, player_y))
+
+            # Continuous shooting
+            if (keys[pygame.K_SPACE] or touch_fire) and now - last_shot > 220:
+
+                bullets.append(
+                    pygame.Rect(
+                        int(player_x - 4),
+                        int(player_y - 30),
+                        8,
+                        20
+                    )
                 )
+
+                last_shot = now
+                play_sound("shoot")
+
+            # Enemy spawning
+            if now - last_enemy_spawn > spawn_delay:
+
+                enemy_type = "heavy" if random.random() < 0.2 else "normal"
+
+                size = 54 if enemy_type == "heavy" else 40
+
+                enemies.append({
+                    "rect": pygame.Rect(
+                        random.randint(35, WIDTH - 35 - size),
+                        -size,
+                        size,
+                        size
+                    ),
+                    "type": enemy_type,
+                    "health": 3 if enemy_type == "heavy" else 1,
+                    "speed": current_enemy_speed * (
+                        0.7 if enemy_type == "heavy" else 1
+                    )
+                })
+
+                last_enemy_spawn = now
+
+            # Move player bullets
+            for bullet in bullets:
+                bullet.y -= 650 * dt
+
+            bullets = [
+                bullet for bullet in bullets
+                if bullet.bottom > 0
+            ]
+
+            # Enemy firing
+            if now - last_enemy_shot > 2200:
+
+                if enemies:
+
+                    enemy = random.choice(enemies)
+
+                    enemy_bullets.append(
+                        pygame.Rect(
+                            enemy["rect"].centerx - 4,
+                            enemy["rect"].bottom,
+                            8,
+                            16
+                        )
+                    )
+
+                last_enemy_shot = now
+
+            # Move enemy ships
+            for enemy in enemies:
+                enemy["rect"].y += enemy["speed"] * dt
+
+            # Move enemy bullets
+            for bullet in enemy_bullets:
+                bullet.y += 180 * dt
+
+            enemy_bullets = [
+                bullet for bullet in enemy_bullets
+                if bullet.top < HEIGHT
+            ]
+
+            # Bullet vs enemy collision
+            for bullet in bullets[:]:
+
+                for enemy in enemies[:]:
+
+                    if bullet.colliderect(enemy["rect"]):
+
+                        if bullet in bullets:
+                            bullets.remove(bullet)
+
+                        enemy["health"] -= 1
+
+                        if enemy["health"] <= 0:
+
+                            ex = enemy["rect"].centerx
+                            ey = enemy["rect"].centery
+
+                            color = PURPLE if enemy["type"] == "heavy" else ORANGE
+
+                            create_explosion(ex, ey, color)
+
+                            enemies.remove(enemy)
+
+                            score += 30 if enemy["type"] == "heavy" else 10
+
+                            play_sound("explosion")
+                            shake = 7
+
+                        else:
+                            play_sound("hit")
+
+                        break
+
+            # Player collision rectangle
+            player_rect = pygame.Rect(
+                int(player_x - 18),
+                int(player_y - 22),
+                36,
+                42
             )
 
-            last_shot = now
-            play_sound("shoot")
-
-        # Enemy spawning
-        if now - last_enemy_spawn > spawn_delay:
-
-            enemy_type = "heavy" if random.random() < 0.2 else "normal"
-
-            size = 54 if enemy_type == "heavy" else 40
-
-            enemies.append({
-                "rect": pygame.Rect(
-                    random.randint(35, WIDTH - 35 - size),
-                    -size,
-                    size,
-                    size
-                ),
-                "type": enemy_type,
-                "health": 3 if enemy_type == "heavy" else 1,
-                "speed": current_enemy_speed * (
-                    0.7 if enemy_type == "heavy" else 1
-                )
-            })
-
-            last_enemy_spawn = now
-
-        # Move player bullets
-        for bullet in bullets:
-            bullet.y -= 650 * dt
-
-        bullets = [
-            bullet for bullet in bullets
-            if bullet.bottom > 0
-        ]
-
-        # Enemy firing
-        if now - last_enemy_shot > 2200:
-
-            if enemies:
-
-                enemy = random.choice(enemies)
-
-                enemy_bullets.append(
-                    pygame.Rect(
-                        enemy["rect"].centerx - 4,
-                        enemy["rect"].bottom,
-                        8,
-                        16
-                    )
-                )
-
-            last_enemy_shot = now
-
-        # Move enemy ships
-        for enemy in enemies:
-            enemy["rect"].y += enemy["speed"] * dt
-
-        # Move enemy bullets
-        for bullet in enemy_bullets:
-            bullet.y += 180 * dt
-
-        enemy_bullets = [
-            bullet for bullet in enemy_bullets
-            if bullet.top < HEIGHT
-        ]
-
-        # Bullet vs enemy collision
-        for bullet in bullets[:]:
-
-            for enemy in enemies[:]:
-
-                if bullet.colliderect(enemy["rect"]):
-
-                    if bullet in bullets:
-                        bullets.remove(bullet)
-
-                    enemy["health"] -= 1
-
-                    if enemy["health"] <= 0:
-
-                        ex = enemy["rect"].centerx
-                        ey = enemy["rect"].centery
-
-                        color = PURPLE if enemy["type"] == "heavy" else ORANGE
-
-                        create_explosion(ex, ey, color)
-
-                        enemies.remove(enemy)
-
-                        score += 30 if enemy["type"] == "heavy" else 10
-
-                        play_sound("explosion")
-                        shake = 7
-
-                    else:
-                        play_sound("hit")
-
-                    break
-
-        # Player collision rectangle
-        player_rect = pygame.Rect(
-            int(player_x - 18),
-            int(player_y - 22),
-            36,
-            42
-        )
-
-        # Enemy vs player collision
-        if now >= invulnerable_until:
-
-            for enemy in enemies[:]:
-
-                if player_rect.colliderect(enemy["rect"]):
-
-                    create_explosion(
-                        enemy["rect"].centerx,
-                        enemy["rect"].centery,
-                        RED
-                    )
-
-                    enemies.remove(enemy)
-                    lives -= 1
-
-                    invulnerable_until = now + 2000
-                    shake = 15
-
-                    play_sound("hit")
-
-                    break
-
-            # Enemy bullets vs player
+            # Enemy vs player collision
             if now >= invulnerable_until:
 
-                for bullet in enemy_bullets[:]:
+                for enemy in enemies[:]:
 
-                    if player_rect.colliderect(bullet):
+                    if player_rect.colliderect(enemy["rect"]):
 
-                        enemy_bullets.remove(bullet)
+                        create_explosion(
+                            enemy["rect"].centerx,
+                            enemy["rect"].centery,
+                            RED
+                        )
+
+                        enemies.remove(enemy)
                         lives -= 1
 
                         invulnerable_until = now + 2000
@@ -731,332 +766,359 @@ while running:
 
                         play_sound("hit")
 
-                        create_explosion(
-                            player_x,
-                            player_y,
-                            BLUE,
-                            12
-                        )
-
                         break
 
-        # Enemies passing the player
-        for enemy in enemies[:]:
+                # Enemy bullets vs player
+                if now >= invulnerable_until:
 
-            if enemy["rect"].top > HEIGHT:
+                    for bullet in enemy_bullets[:]:
 
-                enemies.remove(enemy)
-                lives -= 1
-                shake = 8
+                        if player_rect.colliderect(bullet):
 
-        # High score
-        if score > high_score:
-            high_score = score
-            save_high_score(high_score)
+                            enemy_bullets.remove(bullet)
+                            lives -= 1
 
-        # Game over
-        if lives <= 0:
+                            invulnerable_until = now + 2000
+                            shake = 15
 
-            lives = 0
-            game_state = GAME_OVER
+                            play_sound("hit")
 
-            create_explosion(
-                player_x,
-                player_y,
-                BLUE,
-                45
-            )
+                            create_explosion(
+                                player_x,
+                                player_y,
+                                BLUE,
+                                12
+                            )
 
-            play_sound("explosion")
+                            break
 
-    # ==============================================
-    # 15. DRAW BACKGROUND
-    # ==============================================
+            # Enemies passing the player
+            for enemy in enemies[:]:
 
-    screen.fill(BLACK)
-    draw_stars(screen)
+                if enemy["rect"].top > HEIGHT:
 
-    # ==============================================
-    # 16. GAMEPLAY DRAWING
-    # ==============================================
+                    enemies.remove(enemy)
+                    lives -= 1
+                    shake = 8
 
-    if game_state in (PLAYING, PAUSED, GAME_OVER):
+            # High score
+            if score > high_score:
+                high_score = score
+                save_high_score(high_score)
 
-        offset_x = random.randint(-shake, shake) if shake > 0 else 0
-        offset_y = random.randint(-shake, shake) if shake > 0 else 0
+            # Game over
+            if lives <= 0:
 
-        shake = max(0, shake - 1)
+                lives = 0
+                game_state = GAME_OVER
 
-        # Draw player
-        if game_state != GAME_OVER:
+                create_explosion(
+                    player_x,
+                    player_y,
+                    BLUE,
+                    45
+                )
 
-            invulnerable = now < invulnerable_until
+                play_sound("explosion")
 
-            draw_player(
-                screen,
-                int(player_x + offset_x),
-                int(player_y + offset_y),
-                invulnerable
-            )
+        # ==============================================
+        # 15. DRAW BACKGROUND
+        # ==============================================
 
-        # Player bullets
-        for bullet in bullets:
+        screen.fill(BLACK)
+        draw_stars(screen)
 
-            shifted = bullet.move(offset_x, offset_y)
+        # ==============================================
+        # 16. GAMEPLAY DRAWING
+        # ==============================================
 
-            pygame.draw.rect(
-                screen,
-                CYAN,
-                shifted,
-                border_radius=4
-            )
+        if game_state in (PLAYING, PAUSED, GAME_OVER):
 
-            pygame.draw.rect(
-                screen,
-                WHITE,
-                (shifted.x + 2, shifted.y, 3, shifted.height),
-                border_radius=2
-            )
+            offset_x = random.randint(-shake, shake) if shake > 0 else 0
+            offset_y = random.randint(-shake, shake) if shake > 0 else 0
 
-        # Enemies
-        for enemy in enemies:
+            shake = max(0, shake - 1)
 
-            shifted_enemy = enemy["rect"].move(offset_x, offset_y)
+            # Draw player
+            if game_state != GAME_OVER:
 
-            temp_enemy = enemy.copy()
-            temp_enemy["rect"] = shifted_enemy
+                invulnerable = now < invulnerable_until
 
-            draw_enemy(screen, temp_enemy)
+                draw_player(
+                    screen,
+                    int(player_x + offset_x),
+                    int(player_y + offset_y),
+                    invulnerable
+                )
 
-            if enemy["type"] == "heavy":
+            # Player bullets
+            for bullet in bullets:
+
+                shifted = bullet.move(offset_x, offset_y)
 
                 pygame.draw.rect(
                     screen,
-                    DARK_BLUE,
-                    (shifted_enemy.x, shifted_enemy.y - 9, shifted_enemy.width, 5)
+                    CYAN,
+                    shifted,
+                    border_radius=4
                 )
 
                 pygame.draw.rect(
                     screen,
-                    GREEN,
-                    (shifted_enemy.x, shifted_enemy.y - 9,
-                     shifted_enemy.width * enemy["health"] / 3, 5)
+                    WHITE,
+                    (shifted.x + 2, shifted.y, 3, shifted.height),
+                    border_radius=2
                 )
 
-        # Enemy bullets
-        for bullet in enemy_bullets:
+            # Enemies
+            for enemy in enemies:
 
+                shifted_enemy = enemy["rect"].move(offset_x, offset_y)
+
+                temp_enemy = enemy.copy()
+                temp_enemy["rect"] = shifted_enemy
+
+                draw_enemy(screen, temp_enemy)
+
+                if enemy["type"] == "heavy":
+
+                    pygame.draw.rect(
+                        screen,
+                        DARK_BLUE,
+                        (shifted_enemy.x, shifted_enemy.y - 9, shifted_enemy.width, 5)
+                    )
+
+                    pygame.draw.rect(
+                        screen,
+                        GREEN,
+                        (shifted_enemy.x, shifted_enemy.y - 9,
+                         shifted_enemy.width * enemy["health"] / 3, 5)
+                    )
+
+            # Enemy bullets
+            for bullet in enemy_bullets:
+
+                pygame.draw.rect(
+                    screen,
+                    RED,
+                    bullet.move(offset_x, offset_y),
+                    border_radius=4
+                )
+
+            # Particles
+            draw_particles(screen)
+
+            # HUD
             pygame.draw.rect(
                 screen,
-                RED,
-                bullet.move(offset_x, offset_y),
-                border_radius=4
+                (10, 20, 45),
+                (10, 10, WIDTH - 20, 45),
+                border_radius=10
             )
 
-        # Particles
-        draw_particles(screen)
+            draw_text(screen, f"SCORE: {score}", font, WHITE, 105, 32)
+            draw_text(screen, f"LIVES: {lives}", font, CYAN, 450, 32)
+            draw_text(screen, f"BEST: {high_score}", font, YELLOW, 770, 32)
 
-        # HUD
-        pygame.draw.rect(
-            screen,
-            (10, 20, 45),
-            (10, 10, WIDTH - 20, 45),
-            border_radius=10
-        )
+            if game_state == PLAYING:
+                draw_text(
+                    screen,
+                    "ESC: PAUSE",
+                    small_font,
+                    WHITE,
+                    WIDTH - 80,
+                    HEIGHT - 20
+                )
 
-        draw_text(screen, f"SCORE: {score}", font, WHITE, 105, 32)
-        draw_text(screen, f"LIVES: {lives}", font, CYAN, 450, 32)
-        draw_text(screen, f"BEST: {high_score}", font, YELLOW, 770, 32)
+                if show_touch_controls:
+                    for control_rect, label, color in (
+                        (TOUCH_LEFT, "LEFT", BLUE),
+                        (TOUCH_RIGHT, "RIGHT", BLUE),
+                        (TOUCH_FIRE, "FIRE", RED),
+                    ):
+                        pygame.draw.rect(screen, (10, 28, 58), control_rect, border_radius=14)
+                        pygame.draw.rect(screen, color, control_rect, 2, border_radius=14)
+                        draw_text(screen, label, small_font, WHITE,
+                                  control_rect.centerx, control_rect.centery)
 
-        if game_state == PLAYING:
+        # ==============================================
+        # 17. MAIN MENU
+        # ==============================================
+
+        if game_state == MENU:
+
             draw_text(
                 screen,
-                "ESC: PAUSE",
-                small_font,
-                WHITE,
-                WIDTH - 80,
-                HEIGHT - 20
+                "GALAXY WAR",
+                large_font,
+                CYAN,
+                WIDTH // 2,
+                170
             )
 
-    # ==============================================
-    # 17. MAIN MENU
-    # ==============================================
+            draw_text(
+                screen,
+                "SPACE SHOOTER",
+                medium_font,
+                WHITE,
+                WIDTH // 2,
+                225
+            )
 
-    if game_state == MENU:
+            draw_text(
+                screen,
+                "Defend the galaxy. Survive the invasion.",
+                small_font,
+                (170, 195, 225),
+                WIDTH // 2,
+                285
+            )
 
-        draw_text(
-            screen,
-            "GALAXY WAR",
-            large_font,
-            CYAN,
-            WIDTH // 2,
-            170
-        )
+            start_button = draw_button(
+                screen,
+                "START GAME",
+                WIDTH // 2 - 110,
+                340,
+                220,
+                55
+            )
 
-        draw_text(
-            screen,
-            "SPACE SHOOTER",
-            medium_font,
-            WHITE,
-            WIDTH // 2,
-            225
-        )
+            draw_text(
+                screen,
+                f"HIGH SCORE: {high_score}",
+                font,
+                YELLOW,
+                WIDTH // 2,
+                445
+            )
 
-        draw_text(
-            screen,
-            "Defend the galaxy. Survive the invasion.",
-            small_font,
-            (170, 195, 225),
-            WIDTH // 2,
-            285
-        )
+            draw_text(
+                screen,
+                "ARROWS / WASD: MOVE     SPACE: SHOOT",
+                small_font,
+                WHITE,
+                WIDTH // 2,
+                515
+            )
 
-        start_button = draw_button(
-            screen,
-            "START GAME",
-            WIDTH // 2 - 110,
-            340,
-            220,
-            55
-        )
+            draw_text(
+                screen,
+                "ESC: QUIT",
+                small_font,
+                (140, 160, 190),
+                WIDTH // 2,
+                550
+            )
 
-        draw_text(
-            screen,
-            f"HIGH SCORE: {high_score}",
-            font,
-            YELLOW,
-            WIDTH // 2,
-            445
-        )
+        # ==============================================
+        # 18. PAUSE SCREEN
+        # ==============================================
 
-        draw_text(
-            screen,
-            "ARROWS / WASD: MOVE     SPACE: SHOOT",
-            small_font,
-            WHITE,
-            WIDTH // 2,
-            515
-        )
+        if game_state == PAUSED:
 
-        draw_text(
-            screen,
-            "ESC: QUIT",
-            small_font,
-            (140, 160, 190),
-            WIDTH // 2,
-            550
-        )
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 175))
+            screen.blit(overlay, (0, 0))
 
-    # ==============================================
-    # 18. PAUSE SCREEN
-    # ==============================================
+            draw_text(
+                screen,
+                "PAUSED",
+                large_font,
+                CYAN,
+                WIDTH // 2,
+                245
+            )
 
-    if game_state == PAUSED:
+            draw_text(
+                screen,
+                "Press P or ESC to Resume",
+                font,
+                WHITE,
+                WIDTH // 2,
+                325
+            )
 
-        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 175))
-        screen.blit(overlay, (0, 0))
+            resume_button = draw_button(
+                screen,
+                "RESUME",
+                WIDTH // 2 - 100,
+                375,
+                200,
+                55
+            )
 
-        draw_text(
-            screen,
-            "PAUSED",
-            large_font,
-            CYAN,
-            WIDTH // 2,
-            245
-        )
+        # ==============================================
+        # 19. GAME OVER SCREEN
+        # ==============================================
 
-        draw_text(
-            screen,
-            "Press P or ESC to Resume",
-            font,
-            WHITE,
-            WIDTH // 2,
-            325
-        )
+        if game_state == GAME_OVER:
 
-        resume_button = draw_button(
-            screen,
-            "RESUME",
-            WIDTH // 2 - 100,
-            375,
-            200,
-            55
-        )
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            screen.blit(overlay, (0, 0))
 
-    # ==============================================
-    # 19. GAME OVER SCREEN
-    # ==============================================
+            draw_text(
+                screen,
+                "GAME OVER",
+                large_font,
+                RED,
+                WIDTH // 2,
+                215
+            )
 
-    if game_state == GAME_OVER:
+            draw_text(
+                screen,
+                f"YOUR SCORE: {score}",
+                medium_font,
+                WHITE,
+                WIDTH // 2,
+                290
+            )
 
-        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 180))
-        screen.blit(overlay, (0, 0))
+            draw_text(
+                screen,
+                f"BEST SCORE: {high_score}",
+                font,
+                YELLOW,
+                WIDTH // 2,
+                340
+            )
 
-        draw_text(
-            screen,
-            "GAME OVER",
-            large_font,
-            RED,
-            WIDTH // 2,
-            215
-        )
+            restart_button = draw_button(
+                screen,
+                "PLAY AGAIN",
+                WIDTH // 2 - 110,
+                395,
+                220,
+                55
+            )
 
-        draw_text(
-            screen,
-            f"YOUR SCORE: {score}",
-            medium_font,
-            WHITE,
-            WIDTH // 2,
-            290
-        )
+            menu_button = draw_button(
+                screen,
+                "MAIN MENU",
+                WIDTH // 2 - 110,
+                470,
+                220,
+                55
+            )
 
-        draw_text(
-            screen,
-            f"BEST SCORE: {high_score}",
-            font,
-            YELLOW,
-            WIDTH // 2,
-            340
-        )
+            draw_text(
+                screen,
+                "Press R to Restart",
+                small_font,
+                WHITE,
+                WIDTH // 2,
+                555
+            )
 
-        restart_button = draw_button(
-            screen,
-            "PLAY AGAIN",
-            WIDTH // 2 - 110,
-            395,
-            220,
-            55
-        )
+        # ==============================================
+        # 20. DISPLAY UPDATE
+        # ==============================================
 
-        menu_button = draw_button(
-            screen,
-            "MAIN MENU",
-            WIDTH // 2 - 110,
-            470,
-            220,
-            55
-        )
+        pygame.display.flip()
+        await asyncio.sleep(0)
 
-        draw_text(
-            screen,
-            "Press R to Restart",
-            small_font,
-            WHITE,
-            WIDTH // 2,
-            555
-        )
+    pygame.quit()
 
-    # ==============================================
-    # 20. DISPLAY UPDATE
-    # ==============================================
 
-    pygame.display.flip()
-
-# ==================================================
-# 21. EXIT
-# ==================================================
-
-pygame.quit()
-sys.exit()
+asyncio.run(main())
